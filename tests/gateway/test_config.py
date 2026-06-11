@@ -171,6 +171,28 @@ class TestPlatformConfigRoundtrip:
         assert restored.channel_consent_gate is True
         assert restored.channel_consent_prompt == "Custom prompt"
 
+    def test_channel_consent_public_channels_defaults_true(self):
+        assert PlatformConfig().channel_consent_public_channels is True
+        restored = PlatformConfig.from_dict({"channel_consent_gate": True})
+        assert restored.channel_consent_public_channels is True
+
+    def test_channel_consent_public_channels_false(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": True, "public_channels": False}}
+        )
+        assert restored.channel_consent_gate is True
+        assert restored.channel_consent_public_channels is False
+
+    def test_channel_consent_public_channels_roundtrip(self):
+        pc = PlatformConfig(
+            enabled=True,
+            channel_consent_gate=True,
+            channel_consent_public_channels=False,
+        )
+        restored = PlatformConfig.from_dict(pc.to_dict())
+        assert restored.channel_consent_gate is True
+        assert restored.channel_consent_public_channels is False
+
 
 class TestGetConnectedPlatforms:
     def test_returns_enabled_with_token(self):

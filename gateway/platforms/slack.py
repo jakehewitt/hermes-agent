@@ -2154,11 +2154,33 @@ class SlackAdapter(BasePlatformAdapter):
         channel_id = event.get("channel", "")
         if not channel_id:
             return
+
+        # Dedup: Socket Mode can redeliver events after reconnects. A
+        # replayed join must not reset an approved channel back to pending.
+        event_ts = event.get("event_ts", "")
+        if event_ts and self._dedup.is_duplicate(f"join:{channel_id}:{event_ts}"):
+            return
+
         inviter_id = event.get("inviter", "")
 
         await self._send_channel_join_notification(channel_id, inviter_id)
 
         if self.config.channel_consent_gate:
+            # channel_type on member_joined_channel: "C" public, "G" private.
+            is_public = event.get("channel_type", "") == "C"
+            if is_public and not self.config.channel_consent_public_channels:
+                logger.info(
+                    "[Slack] Consent gate skipped for public channel %s "
+                    "(public_channels: false)",
+                    channel_id,
+                )
+                # Clear any stale record from before the config changed so
+                # an old 'pending' can't keep a now-ungated channel dormant.
+                try:
+                    self._get_consent_store().forget(channel_id)
+                except Exception:  # pragma: no cover - defensive
+                    pass
+                return
             await self._post_consent_prompt(channel_id, inviter_id)
 
     async def _send_channel_join_notification(
@@ -2249,13 +2271,23 @@ class SlackAdapter(BasePlatformAdapter):
     async def _post_consent_prompt(
         self, channel_id: str, inviter_id: str
     ) -> None:
-        """Mark the channel pending and post the Activate/Decline prompt."""
+        """Mark the channel pending and post the Activate/Decline prompt.
+
+        Always resets to pending — a member_joined_channel for the bot can
+        only fire when it was NOT in the channel, so a join to a previously
+        approved channel means it was removed and re-added: consent must be
+        re-confirmed. (Replayed duplicates of the same join event are
+        already filtered by the dedup check in the event handler.)
+        """
         try:
             store = self._get_consent_store()
-            # Re-invites to an already-approved channel shouldn't reset
-            # consent; only start tracking on first sight or after decline.
-            if store.status(channel_id) == "approved":
-                return
+            prior = store.status(channel_id)
+            if prior == "approved":
+                logger.info(
+                    "[Slack] Bot re-added to previously approved channel %s "
+                    "— consent reset to pending",
+                    channel_id,
+                )
             store.set(channel_id, "pending")
         except Exception:  # pragma: no cover - defensive
             logger.warning(

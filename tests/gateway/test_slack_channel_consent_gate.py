@@ -189,12 +189,77 @@ async def test_invalid_consent_prompt_falls_back_to_default(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_reinvite_to_approved_channel_keeps_approval(tmp_path):
+async def test_readd_to_approved_channel_reconfirms(tmp_path):
+    """Removed + re-added → consent resets to pending and re-prompts."""
     a, client = make_adapter(tmp_path)
     a._consent_store.set("C_NEW", "approved", by_user_id="U_HUMAN")
     await a._handle_member_joined_channel(join_event())
-    client.chat_postMessage.assert_not_awaited()
+    assert a._consent_store.status("C_NEW") == "pending"
+    client.chat_postMessage.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_join_event_does_not_reset_approval(tmp_path):
+    """Socket Mode redelivery of the SAME join event must not re-gate."""
+    a, client = make_adapter(tmp_path)
+    event = join_event()
+    event["event_ts"] = "111.222"
+    await a._handle_member_joined_channel(event)
+    # Approved between delivery and redelivery
+    a._consent_store.set("C_NEW", "approved", by_user_id="U_HUMAN")
+    await a._handle_member_joined_channel(event)  # replay
     assert a._consent_store.status("C_NEW") == "approved"
+    client.chat_postMessage.assert_awaited_once()  # no second prompt
+
+
+def public_join_event(**kw):
+    e = join_event(**kw)
+    e["channel_type"] = "C"
+    return e
+
+
+def private_join_event(**kw):
+    e = join_event(**kw)
+    e["channel_type"] = "G"
+    return e
+
+
+@pytest.mark.asyncio
+async def test_public_channels_gated_by_default(tmp_path):
+    a, client = make_adapter(tmp_path)
+    await a._handle_member_joined_channel(public_join_event())
+    assert a._consent_store.status("C_NEW") == "pending"
+    client.chat_postMessage.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_public_channels_skip_gate_when_configured(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_public_channels = False
+    await a._handle_member_joined_channel(public_join_event())
+    assert a._consent_store.status("C_NEW") is None
+    client.chat_postMessage.assert_not_awaited()
+    assert a._is_channel_consent_blocked("C_NEW") is False
+
+
+@pytest.mark.asyncio
+async def test_private_channels_still_gated_when_public_skipped(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_public_channels = False
+    await a._handle_member_joined_channel(private_join_event())
+    assert a._consent_store.status("C_NEW") == "pending"
+    client.chat_postMessage.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_public_skip_clears_stale_pending_record(tmp_path):
+    """Config flipped to public_channels:false after a channel was gated."""
+    a, client = make_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "pending")
+    a.config.channel_consent_public_channels = False
+    await a._handle_member_joined_channel(public_join_event())
+    assert a._consent_store.status("C_NEW") is None
+    assert a._is_channel_consent_blocked("C_NEW") is False
 
 
 @pytest.mark.asyncio
