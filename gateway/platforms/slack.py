@@ -2175,8 +2175,7 @@ class SlackAdapter(BasePlatformAdapter):
         await self._send_channel_join_notification(channel_id, inviter_id)
 
         if self.config.channel_consent_gate:
-            # channel_type on member_joined_channel: "C" public, "G" private.
-            is_public = event.get("channel_type", "") == "C"
+            is_public = await self._is_public_channel(channel_id)
             if is_public and not self.config.channel_consent_public_channels:
                 logger.info(
                     "[Slack] Consent gate skipped for public channel %s "
@@ -2246,6 +2245,36 @@ class SlackAdapter(BasePlatformAdapter):
 
             self._consent_store = ChannelConsentStore()
         return self._consent_store
+
+    async def _is_public_channel(self, channel_id: str) -> bool:
+        """Ask Slack whether a channel is public (conversations.info).
+
+        The ``channel_type`` field on member_joined_channel is "C" for BOTH
+        public and private channels created as public-then-converted or via
+        the modern UI (Slack only uses "G" for legacy private groups), so it
+        cannot be trusted for the public/private distinction. Fail CLOSED
+        (treat as private → gate applies) when the lookup fails: wrongly
+        prompting in a public channel is recoverable; wrongly skipping the
+        gate in a private one defeats its purpose.
+        """
+        try:
+            client = self._get_client(channel_id)
+            if client is None:
+                return False
+            resp = await client.conversations_info(channel=channel_id)
+            info = (
+                resp.get("channel", {}) if isinstance(resp, dict)
+                else getattr(resp, "data", {}).get("channel", {})
+            )
+            return not bool(info.get("is_private", True))
+        except Exception:
+            logger.warning(
+                "[Slack] conversations_info failed for %s; treating as "
+                "private (gate applies)",
+                channel_id,
+                exc_info=True,
+            )
+            return False
 
     def _is_channel_consent_blocked(self, channel_id: str) -> bool:
         """True when the consent gate says this channel is dormant."""
