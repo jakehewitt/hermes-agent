@@ -563,6 +563,57 @@ async def test_decline_click_keeps_dormant(tmp_path):
 
     assert a._consent_store.status("C_NEW") == "declined"
     assert a._is_channel_consent_blocked("C_NEW") is True
+    client.conversations_leave.assert_not_awaited()  # default: stay
+
+
+@pytest.mark.asyncio
+async def test_decline_with_on_decline_leave_exits_channel(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_on_decline = "leave"
+    a._is_interactive_user_authorized = MagicMock(return_value=True)
+    a._consent_store.set("C_NEW", "pending")
+
+    body, action = consent_click("hermes_consent_decline")
+    await a._handle_consent_action(AsyncMock(), body, action)
+
+    client.conversations_leave.assert_awaited_once_with(channel="C_NEW")
+    # Record dropped entirely → re-invite starts a fresh prompt
+    assert a._consent_store.status("C_NEW") is None
+    # Decision message mentions leaving
+    text = client.chat_update.await_args.kwargs["text"]
+    assert "leaving" in text
+
+
+@pytest.mark.asyncio
+async def test_activate_never_leaves_even_with_on_decline_leave(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_on_decline = "leave"
+    a._is_interactive_user_authorized = MagicMock(return_value=True)
+    a._consent_store.set("C_NEW", "pending")
+
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)
+
+    client.conversations_leave.assert_not_awaited()
+    assert a._consent_store.status("C_NEW") == "approved"
+
+
+@pytest.mark.asyncio
+async def test_leave_failure_falls_back_to_dormant(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_on_decline = "leave"
+    a._is_interactive_user_authorized = MagicMock(return_value=True)
+    a._consent_store.set("C_NEW", "pending")
+    client.conversations_leave = AsyncMock(
+        side_effect=RuntimeError("missing_scope")
+    )
+
+    body, action = consent_click("hermes_consent_decline")
+    await a._handle_consent_action(AsyncMock(), body, action)  # must not raise
+
+    # Still blocked despite remaining in the channel
+    assert a._consent_store.status("C_NEW") == "declined"
+    assert a._is_channel_consent_blocked("C_NEW") is True
 
 
 @pytest.mark.asyncio
