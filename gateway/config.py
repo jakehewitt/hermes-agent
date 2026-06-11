@@ -368,11 +368,18 @@ class PlatformConfig:
     #     enabled: true
     #     prompt: "Custom consent prompt. Placeholders: {channel_id},
     #              {channel_ref}, {inviter_id}, {inviter_ref}"
+    #     public_channels: false   # skip the gate for public channels
     channel_consent_gate: bool = False
 
     # Optional override for the consent prompt text (set via the dict form
     # of channel_consent_gate above). None → built-in default.
     channel_consent_prompt: Optional[str] = None
+
+    # Whether the consent gate also applies to PUBLIC channels. True
+    # (default) gates everything; False gates only private channels/groups
+    # — public-channel joins activate immediately (join notification still
+    # fires either way).
+    channel_consent_public_channels: bool = True
 
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -389,11 +396,16 @@ class PlatformConfig:
         if self.channel_join_notification:
             result["channel_join_notification"] = self.channel_join_notification
         if self.channel_consent_gate:
-            if self.channel_consent_prompt:
-                result["channel_consent_gate"] = {
-                    "enabled": True,
-                    "prompt": self.channel_consent_prompt,
-                }
+            if (
+                self.channel_consent_prompt
+                or not self.channel_consent_public_channels
+            ):
+                _gate: Dict[str, Any] = {"enabled": True}
+                if self.channel_consent_prompt:
+                    _gate["prompt"] = self.channel_consent_prompt
+                if not self.channel_consent_public_channels:
+                    _gate["public_channels"] = False
+                result["channel_consent_gate"] = _gate
             else:
                 result["channel_consent_gate"] = self.channel_consent_gate
         if self.token:
@@ -445,12 +457,15 @@ class PlatformConfig:
         _ccg = data.get("channel_consent_gate")
         if _ccg is None:
             _ccg = data.get("extra", {}).get("channel_consent_gate")
-        # Dict form: {enabled: bool (default true), prompt: str}
+        # Dict form: {enabled: bool (default true), prompt: str,
+        # public_channels: bool (default true)}
         _ccg_prompt = None
+        _ccg_public = True
         if isinstance(_ccg, dict):
             _raw_prompt = _ccg.get("prompt")
             if _raw_prompt is not None and str(_raw_prompt).strip():
                 _ccg_prompt = str(_raw_prompt)
+            _ccg_public = _coerce_bool(_ccg.get("public_channels"), True)
             _ccg = _ccg.get("enabled", True)
 
         return cls(
@@ -464,6 +479,7 @@ class PlatformConfig:
             channel_join_notification=_cjn,
             channel_consent_gate=_coerce_bool(_ccg, False),
             channel_consent_prompt=_ccg_prompt,
+            channel_consent_public_channels=_ccg_public,
             extra=data.get("extra", {}),
         )
 
