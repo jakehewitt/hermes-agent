@@ -284,6 +284,120 @@ async def test_public_skip_clears_stale_pending_record(tmp_path):
     assert a._is_channel_consent_blocked("C_NEW") is False
 
 
+# ---------------------------------------------------------------------------
+# Consent audit trail (status-channel follow-ups)
+# ---------------------------------------------------------------------------
+
+
+def make_audit_adapter(tmp_path, cjn=None):
+    from gateway.platforms.base import SendResult
+
+    a, client = make_adapter(
+        tmp_path, cjn=cjn or {"channel": "C_STATUS"}
+    )
+    a.send = AsyncMock(return_value=SendResult(success=True))
+    a._is_interactive_user_authorized = MagicMock(return_value=True)
+    return a, client
+
+
+def sent_texts(a, target="C_STATUS"):
+    return [
+        c.args[1] for c in a.send.await_args_list if c.args[0] == target
+    ]
+
+
+@pytest.mark.asyncio
+async def test_activate_posts_audit_to_status_channel(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    texts = sent_texts(a)
+    assert len(texts) == 1
+    assert "<#C_NEW>" in texts[0]
+    assert "<@U_HUMAN>" in texts[0]
+    assert "activated" in texts[0]
+
+
+@pytest.mark.asyncio
+async def test_decline_posts_audit_to_status_channel(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_decline")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    texts = sent_texts(a)
+    assert len(texts) == 1
+    assert "declined" in texts[0]
+    assert "<@U_HUMAN>" in texts[0]
+
+
+@pytest.mark.asyncio
+async def test_public_autoskip_posts_audit(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    a.config.channel_consent_public_channels = False
+    set_channel_privacy(client, is_private=False)
+    await a._handle_member_joined_channel(public_join_event())
+    texts = sent_texts(a)
+    # join notification + auto-activated audit
+    assert len(texts) == 2
+    assert "automatically" in texts[1]
+    assert "<#C_NEW>" in texts[1]
+
+
+@pytest.mark.asyncio
+async def test_audit_templates_overridable(tmp_path):
+    a, client = make_audit_adapter(
+        tmp_path,
+        cjn={
+            "channel": "C_STATUS",
+            "activated": "AUDIT ON {channel_id} by {user_id}",
+        },
+    )
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    assert sent_texts(a) == ["AUDIT ON C_NEW by U_HUMAN"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_audit_template_falls_back(tmp_path):
+    a, client = make_audit_adapter(
+        tmp_path,
+        cjn={"channel": "C_STATUS", "declined": "bad {nope}"},
+    )
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_decline")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    texts = sent_texts(a)
+    assert len(texts) == 1
+    assert "declined" in texts[0]  # default template used
+
+
+@pytest.mark.asyncio
+async def test_no_audit_without_status_channel(tmp_path):
+    """Gate works standalone — no channel_join_notification configured."""
+    a, client = make_adapter(tmp_path, cjn=None)
+    a.send = AsyncMock()
+    a._is_interactive_user_authorized = MagicMock(return_value=True)
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    assert a._consent_store.status("C_NEW") == "approved"
+    a.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_audit_send_failure_does_not_break_consent(tmp_path):
+    from gateway.platforms.base import SendResult
+
+    a, client = make_audit_adapter(tmp_path)
+    a.send = AsyncMock(return_value=SendResult(success=False, error="boom"))
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)  # must not raise
+    assert a._consent_store.status("C_NEW") == "approved"
+
+
 @pytest.mark.asyncio
 async def test_pending_channel_messages_are_dropped(tmp_path):
     a, _ = make_adapter(tmp_path)
