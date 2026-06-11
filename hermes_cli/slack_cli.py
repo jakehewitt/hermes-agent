@@ -75,6 +75,7 @@ def _build_full_manifest(bot_name: str, bot_description: str) -> dict:
                     "files:write",
                     "groups:history",
                     "groups:read",
+                    "groups:write",
                     "im:history",
                     "im:read",
                     "im:write",

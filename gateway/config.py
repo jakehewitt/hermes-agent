@@ -386,6 +386,8 @@ class PlatformConfig:
     #     public_channels: false   # skip the gate for public channels
     #     on_decline: leave        # leave the channel when declined
     #                              # (default: dormant — stay but ignore)
+    #                              # leave requires the groups:write scope
+    #                              # (private) / channels:write (public)
     channel_consent_gate: bool = False
 
     # Optional override for the consent prompt text (set via the dict form
