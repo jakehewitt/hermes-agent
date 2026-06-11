@@ -213,20 +213,28 @@ async def test_duplicate_join_event_does_not_reset_approval(tmp_path):
 
 
 def public_join_event(**kw):
-    e = join_event(**kw)
-    e["channel_type"] = "C"
-    return e
+    return join_event(**kw)
 
 
 def private_join_event(**kw):
-    e = join_event(**kw)
-    e["channel_type"] = "G"
-    return e
+    return join_event(**kw)
+
+
+def set_channel_privacy(client, is_private: bool):
+    """Mock conversations.info — the source of truth for public/private.
+
+    (The channel_type field on the event is 'C' for BOTH public and private
+    channels, so the adapter must call conversations.info instead.)
+    """
+    client.conversations_info = AsyncMock(
+        return_value={"ok": True, "channel": {"is_private": is_private}}
+    )
 
 
 @pytest.mark.asyncio
 async def test_public_channels_gated_by_default(tmp_path):
     a, client = make_adapter(tmp_path)
+    set_channel_privacy(client, is_private=False)
     await a._handle_member_joined_channel(public_join_event())
     assert a._consent_store.status("C_NEW") == "pending"
     client.chat_postMessage.assert_awaited_once()
@@ -236,6 +244,7 @@ async def test_public_channels_gated_by_default(tmp_path):
 async def test_public_channels_skip_gate_when_configured(tmp_path):
     a, client = make_adapter(tmp_path)
     a.config.channel_consent_public_channels = False
+    set_channel_privacy(client, is_private=False)
     await a._handle_member_joined_channel(public_join_event())
     assert a._consent_store.status("C_NEW") is None
     client.chat_postMessage.assert_not_awaited()
@@ -246,7 +255,19 @@ async def test_public_channels_skip_gate_when_configured(tmp_path):
 async def test_private_channels_still_gated_when_public_skipped(tmp_path):
     a, client = make_adapter(tmp_path)
     a.config.channel_consent_public_channels = False
+    set_channel_privacy(client, is_private=True)
     await a._handle_member_joined_channel(private_join_event())
+    assert a._consent_store.status("C_NEW") == "pending"
+    client.chat_postMessage.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_privacy_lookup_failure_fails_closed(tmp_path):
+    """conversations.info error → treat as private → gate applies."""
+    a, client = make_adapter(tmp_path)
+    a.config.channel_consent_public_channels = False
+    client.conversations_info = AsyncMock(side_effect=RuntimeError("boom"))
+    await a._handle_member_joined_channel(join_event())
     assert a._consent_store.status("C_NEW") == "pending"
     client.chat_postMessage.assert_awaited_once()
 
@@ -257,6 +278,7 @@ async def test_public_skip_clears_stale_pending_record(tmp_path):
     a, client = make_adapter(tmp_path)
     a._consent_store.set("C_NEW", "pending")
     a.config.channel_consent_public_channels = False
+    set_channel_privacy(client, is_private=False)
     await a._handle_member_joined_channel(public_join_event())
     assert a._consent_store.status("C_NEW") is None
     assert a._is_channel_consent_blocked("C_NEW") is False
