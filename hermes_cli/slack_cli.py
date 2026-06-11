@@ -89,6 +89,7 @@ def _build_full_manifest(bot_name: str, bot_description: str) -> dict:
                     "assistant_thread_context_changed",
                     "assistant_thread_started",
                     "member_joined_channel",
+                    "member_left_channel",
                     "message.channels",
                     "message.groups",
                     "message.im",

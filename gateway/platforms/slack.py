@@ -910,6 +910,10 @@ class SlackAdapter(BasePlatformAdapter):
             async def handle_member_joined_channel(event, say):
                 await self._handle_member_joined_channel(event)
 
+            @self._app.event("member_left_channel")
+            async def handle_member_left_channel(event, say):
+                await self._handle_member_left_channel(event)
+
             # Consent gate buttons (channel_consent_gate config).
             for _action_id in (
                 "hermes_consent_activate",
@@ -2141,6 +2145,7 @@ class SlackAdapter(BasePlatformAdapter):
             "✅ {channel_ref} was activated automatically "
             "(public channel — no confirmation required)."
         ),
+        "removed": "👋 I was removed from {channel_ref}.",
     }
 
     def _join_notification_target(self) -> str:
@@ -2256,6 +2261,55 @@ class SlackAdapter(BasePlatformAdapter):
                 )
                 return
             await self._post_consent_prompt(channel_id, inviter_id)
+
+    async def _handle_member_left_channel(self, event: dict) -> None:
+        """React to the bot being removed from a channel.
+
+        Posts a 'removed' audit line to the status channel and marks any
+        consent record so the next join re-prompts. Slack does not say WHO
+        removed the bot — the event only reports the departure — so the
+        audit line cannot name the remover.
+        """
+        left_user = event.get("user", "")
+        team_id = event.get("team") or ""
+        bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
+        if not left_user or not bot_uid or left_user != bot_uid:
+            return
+
+        channel_id = event.get("channel", "")
+        if not channel_id:
+            return
+
+        # Dedup, mirroring the join handler.
+        event_ts = event.get("event_ts", "")
+        if event_ts and self._dedup.is_duplicate(
+            f"left:{channel_id}:{event_ts}"
+        ):
+            return
+
+        logger.info(
+            "[Slack] Bot removed from channel %s",
+            channel_id,
+        )
+
+        # Drop any consent record: membership ended, so standing consent
+        # ends with it (the join handler would reset to pending anyway;
+        # this keeps the store from accumulating stale entries).
+        if self.config.channel_consent_gate:
+            try:
+                self._get_consent_store().forget(channel_id)
+            except Exception:  # pragma: no cover - defensive
+                logger.warning(
+                    "[Slack] Could not clear consent record for %s",
+                    channel_id,
+                    exc_info=True,
+                )
+
+        await self._send_consent_audit(
+            "removed",
+            channel_id=channel_id,
+            channel_ref=f"<#{channel_id}>",
+        )
 
     async def _send_channel_join_notification(
         self, channel_id: str, inviter_id: str
