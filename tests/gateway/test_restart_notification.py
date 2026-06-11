@@ -584,6 +584,54 @@ async def test_send_home_channel_startup_notification_default_flag_true(
 
 
 @pytest.mark.asyncio
+async def test_send_home_channel_startup_notification_custom_message(
+    tmp_path, monkeypatch
+):
+    """gateway_restart_messages['online'] overrides the startup text."""
+    monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+
+    runner, adapter = make_restart_runner()
+    runner.config.platforms[Platform.TELEGRAM].home_channel = HomeChannel(
+        platform=Platform.TELEGRAM,
+        chat_id="home-42",
+        name="Ops Home",
+    )
+    runner.config.platforms[Platform.TELEGRAM].gateway_restart_messages = {
+        "online": "Singularity is back online."
+    }
+    adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="home"))
+
+    delivered = await runner._send_home_channel_startup_notifications()
+
+    assert delivered == {("telegram", "home-42", None)}
+    adapter.send.assert_called_once_with(
+        "home-42",
+        "Singularity is back online.",
+    )
+
+
+def test_lifecycle_message_fallbacks():
+    """Missing/blank overrides fall back to built-in defaults per key."""
+    runner, _adapter = make_restart_runner()
+
+    # No overrides configured → defaults.
+    assert "Gateway online" in runner._lifecycle_message(Platform.TELEGRAM, "online")
+    assert "Gateway restarting" in runner._lifecycle_message(Platform.TELEGRAM, "restarting")
+
+    # Partial overrides: only the provided key changes.
+    runner.config.platforms[Platform.TELEGRAM].gateway_restart_messages = {
+        "restarting": "Custom restart text",
+        "shutting_down": "",  # blank → fall back to default
+    }
+    assert runner._lifecycle_message(Platform.TELEGRAM, "restarting") == "Custom restart text"
+    assert "Gateway shutting down" in runner._lifecycle_message(Platform.TELEGRAM, "shutting_down")
+    assert "Gateway online" in runner._lifecycle_message(Platform.TELEGRAM, "online")
+
+    # Unknown platform / None → defaults.
+    assert "Gateway online" in runner._lifecycle_message(None, "online")
+
+
+@pytest.mark.asyncio
 async def test_send_restart_notification_skipped_when_flag_disabled(
     tmp_path, monkeypatch
 ):

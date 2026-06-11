@@ -1440,6 +1440,19 @@ _INTERRUPT_REASON_SSE_DISCONNECT = "SSE client disconnected"
 _INTERRUPT_REASON_GATEWAY_SHUTDOWN = "Gateway shutting down"
 _INTERRUPT_REASON_GATEWAY_RESTART = "Gateway restarting"
 
+# Default texts for gateway lifecycle notifications. Each can be overridden
+# per platform via ``gateway_restart_messages`` in the platform config
+# (see PlatformConfig.gateway_restart_messages in gateway/config.py).
+_GATEWAY_LIFECYCLE_MESSAGE_DEFAULTS: Dict[str, str] = {
+    "restarting": (
+        "⚠️ Gateway restarting — Your current task will be interrupted. "
+        "Send any message after restart and I'll try to resume where you left off."
+    ),
+    "shutting_down": "⚠️ Gateway shutting down — Your current task will be interrupted.",
+    "restarted": "♻ Gateway restarted successfully. Your session continues.",
+    "online": "♻️ Gateway online — Hermes is back and ready.",
+}
+
 _CONTROL_INTERRUPT_MESSAGES = frozenset(
     {
         _INTERRUPT_REASON_STOP.lower(),
@@ -3857,6 +3870,23 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception as e:
                 logger.debug("Failed interrupting agent during shutdown: %s", e)
 
+    def _lifecycle_message(self, platform: Optional["Platform"], key: str) -> str:
+        """Resolve a gateway lifecycle notification text for a platform.
+
+        Looks up ``gateway_restart_messages[key]`` on the platform config and
+        falls back to the built-in default. ``platform=None`` returns the
+        default (used when no platform context is available).
+        """
+        default = _GATEWAY_LIFECYCLE_MESSAGE_DEFAULTS[key]
+        if platform is None:
+            return default
+        platform_cfg = self.config.platforms.get(platform)
+        if platform_cfg is None:
+            return default
+        overrides = getattr(platform_cfg, "gateway_restart_messages", None) or {}
+        text = overrides.get(key)
+        return text if text else default
+
     async def _notify_active_sessions_of_shutdown(self) -> None:
         """Send shutdown/restart notifications to active chats and home channels.
 
@@ -3867,14 +3897,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         active = self._snapshot_running_agents()
         restart_source = self._restart_command_source if self._restart_requested else None
 
-        action = "restarting" if self._restart_requested else "shutting down"
-        hint = (
-            "Your current task will be interrupted. "
-            "Send any message after restart and I'll try to resume where you left off."
-            if self._restart_requested
-            else "Your current task will be interrupted."
-        )
-        msg = f"⚠️ Gateway {action} — {hint}"
+        msg_key = "restarting" if self._restart_requested else "shutting_down"
 
         notified: set[tuple[str, str, Optional[str]]] = set()
         for session_key in active:
@@ -3949,7 +3972,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     adapter=adapter,
                 )
 
-                result = await adapter.send(chat_id, msg, metadata=metadata)
+                result = await adapter.send(chat_id, self._lifecycle_message(platform, msg_key), metadata=metadata)
                 if result is not None and getattr(result, "success", True) is False:
                     logger.debug(
                         "Failed to send shutdown notification to %s:%s: %s",
@@ -3997,6 +4020,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 continue
 
             try:
+                shutdown_msg = self._lifecycle_message(platform, msg_key)
                 metadata = self._thread_metadata_for_target(
                     platform,
                     home.chat_id,
@@ -4004,9 +4028,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     adapter=adapter,
                 )
                 if metadata:
-                    result = await adapter.send(str(home.chat_id), msg, metadata=metadata)
+                    result = await adapter.send(str(home.chat_id), shutdown_msg, metadata=metadata)
                 else:
-                    result = await adapter.send(str(home.chat_id), msg)
+                    result = await adapter.send(str(home.chat_id), shutdown_msg)
                 if result is not None and getattr(result, "success", True) is False:
                     logger.debug(
                         "Failed to send shutdown notification to home channel %s:%s: %s",
@@ -11239,7 +11263,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             result = await adapter.send(
                 str(chat_id),
-                "♻ Gateway restarted successfully. Your session continues.",
+                self._lifecycle_message(platform, "restarted"),
                 metadata=metadata,
             )
             # adapter.send() catches provider errors (e.g. "Chat not found")
@@ -11280,7 +11304,6 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """
         delivered: set[tuple[str, str, Optional[str]]] = set()
         skipped = skip_targets or set()
-        message = "♻️ Gateway online — Hermes is back and ready."
 
         for platform, adapter in self.adapters.items():
             home = self.config.get_home_channel(platform)
@@ -11300,6 +11323,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 continue
 
             try:
+                message = self._lifecycle_message(platform, "online")
                 metadata = self._thread_metadata_for_target(
                     platform,
                     home.chat_id,

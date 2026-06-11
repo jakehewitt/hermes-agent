@@ -334,6 +334,21 @@ class PlatformConfig:
     # noise; keep True for back-channels where the operator wants them.
     gateway_restart_notification: bool = True
 
+    # Optional overrides for the gateway lifecycle notification texts.
+    # Keys (all optional; missing keys fall back to the built-in defaults):
+    #   restarting    — sent to active chats/home channels when the gateway
+    #                   begins a restart
+    #   shutting_down — sent to active chats/home channels on plain shutdown
+    #   restarted     — sent to the chat that initiated /restart once the
+    #                   gateway is back
+    #   online        — sent to home channels on startup
+    # Example YAML:
+    #   slack:
+    #     gateway_restart_messages:
+    #       restarting: "Singularity is restarting — back in a moment."
+    #       online: "Singularity is back online."
+    gateway_restart_messages: Dict[str, str] = field(default_factory=dict)
+
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
 
@@ -344,6 +359,8 @@ class PlatformConfig:
             "reply_to_mode": self.reply_to_mode,
             "gateway_restart_notification": self.gateway_restart_notification,
         }
+        if self.gateway_restart_messages:
+            result["gateway_restart_messages"] = self.gateway_restart_messages
         if self.token:
             result["token"] = self.token
         if self.api_key:
@@ -366,6 +383,15 @@ class PlatformConfig:
         if _grn is None:
             _grn = data.get("extra", {}).get("gateway_restart_notification")
 
+        # Same dual lookup for the message-text overrides.
+        _grm = data.get("gateway_restart_messages")
+        if _grm is None:
+            _grm = data.get("extra", {}).get("gateway_restart_messages")
+        if not isinstance(_grm, dict):
+            _grm = {}
+        else:
+            _grm = {str(k): str(v) for k, v in _grm.items() if v is not None}
+
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
             token=data.get("token"),
@@ -373,6 +399,7 @@ class PlatformConfig:
             home_channel=home_channel,
             reply_to_mode=data.get("reply_to_mode", "first"),
             gateway_restart_notification=_coerce_bool(_grn, True),
+            gateway_restart_messages=_grm,
             extra=data.get("extra", {}),
         )
 
@@ -979,6 +1006,8 @@ def load_gateway_config() -> GatewayConfig:
                         bridged["channel_prompts"] = channel_prompts
                 if "gateway_restart_notification" in platform_cfg:
                     bridged["gateway_restart_notification"] = platform_cfg["gateway_restart_notification"]
+                if "gateway_restart_messages" in platform_cfg:
+                    bridged["gateway_restart_messages"] = platform_cfg["gateway_restart_messages"]
                 enabled_was_explicit = _cfg_toplevel and "enabled" in platform_cfg
                 if not bridged and not enabled_was_explicit:
                     continue

@@ -71,6 +71,26 @@ class TestPlatformConfigRoundtrip:
         restored = PlatformConfig.from_dict({"gateway_restart_notification": "false"})
         assert restored.gateway_restart_notification is False
 
+    def test_gateway_restart_messages_default_empty(self):
+        assert PlatformConfig().gateway_restart_messages == {}
+        assert PlatformConfig.from_dict({}).gateway_restart_messages == {}
+
+    def test_gateway_restart_messages_roundtrip(self):
+        msgs = {"online": "Back online!", "restarting": "Brb."}
+        pc = PlatformConfig(enabled=True, gateway_restart_messages=msgs)
+        restored = PlatformConfig.from_dict(pc.to_dict())
+        assert restored.gateway_restart_messages == msgs
+
+    def test_gateway_restart_messages_from_extra(self):
+        restored = PlatformConfig.from_dict(
+            {"extra": {"gateway_restart_messages": {"online": "Hi"}}}
+        )
+        assert restored.gateway_restart_messages == {"online": "Hi"}
+
+    def test_gateway_restart_messages_ignores_non_dict(self):
+        restored = PlatformConfig.from_dict({"gateway_restart_messages": "oops"})
+        assert restored.gateway_restart_messages == {}
+
 
 class TestGetConnectedPlatforms:
     def test_returns_enabled_with_token(self):
