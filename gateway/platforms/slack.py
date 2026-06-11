@@ -2148,6 +2148,15 @@ class SlackAdapter(BasePlatformAdapter):
         joined_user = event.get("user", "")
         team_id = event.get("team") or ""
         bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
+        logger.info(
+            "[Slack] member_joined_channel received: channel=%s "
+            "channel_type=%s user=%s inviter=%s (bot_uid=%s)",
+            event.get("channel", ""),
+            event.get("channel_type", ""),
+            joined_user,
+            event.get("inviter", ""),
+            bot_uid,
+        )
         if not joined_user or not bot_uid or joined_user != bot_uid:
             return
 
