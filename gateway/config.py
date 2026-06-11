@@ -347,6 +347,10 @@ class PlatformConfig:
     #   auto_activated: optional template for public channels exempted from
     #            the consent gate (placeholders {channel_id}, {channel_ref},
     #            {inviter_id}, {inviter_ref})
+    #   removed: optional template for the bot being removed from a channel
+    #            (placeholders {channel_id}, {channel_ref}; Slack does not
+    #            report who removed the bot). Requires the Slack app to
+    #            subscribe to the member_left_channel event.
     # The activated/declined/auto_activated follow-ups serve as a consent
     # audit trail in the status channel and are only sent when the consent
     # gate is enabled.

@@ -398,6 +398,72 @@ async def test_audit_send_failure_does_not_break_consent(tmp_path):
     assert a._consent_store.status("C_NEW") == "approved"
 
 
+# ---------------------------------------------------------------------------
+# Removal logging (member_left_channel)
+# ---------------------------------------------------------------------------
+
+
+def leave_event(user="U_BOT", channel="C_NEW", team="T1", event_ts="99.1"):
+    return {
+        "type": "member_left_channel",
+        "user": user,
+        "channel": channel,
+        "team": team,
+        "event_ts": event_ts,
+    }
+
+
+@pytest.mark.asyncio
+async def test_removal_posts_audit_and_clears_consent(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "approved", by_user_id="U_HUMAN")
+    await a._handle_member_left_channel(leave_event())
+    assert a._consent_store.status("C_NEW") is None
+    texts = sent_texts(a)
+    assert len(texts) == 1
+    assert "removed" in texts[0]
+    assert "<#C_NEW>" in texts[0]
+
+
+@pytest.mark.asyncio
+async def test_other_member_leaving_is_ignored(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "approved", by_user_id="U_HUMAN")
+    await a._handle_member_left_channel(leave_event(user="U_SOMEONE"))
+    assert a._consent_store.status("C_NEW") == "approved"
+    a.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_duplicate_leave_event_posts_once(tmp_path):
+    a, client = make_audit_adapter(tmp_path)
+    event = leave_event()
+    await a._handle_member_left_channel(event)
+    await a._handle_member_left_channel(event)  # replay
+    assert len(sent_texts(a)) == 1
+
+
+@pytest.mark.asyncio
+async def test_removal_logged_without_consent_gate(tmp_path):
+    """Removal audit is part of join notification, not gated on consent."""
+    a, client = make_audit_adapter(tmp_path)
+    a.config.channel_consent_gate = False
+    await a._handle_member_left_channel(leave_event())
+    texts = sent_texts(a)
+    assert len(texts) == 1
+    assert "removed" in texts[0]
+
+
+@pytest.mark.asyncio
+async def test_removal_template_overridable(tmp_path):
+    a, client = make_audit_adapter(
+        tmp_path,
+        cjn={"channel": "C_STATUS", "removed": "GONE FROM {channel_id}"},
+    )
+    await a._handle_member_left_channel(leave_event())
+    assert sent_texts(a) == ["GONE FROM C_NEW"]
+
+
 @pytest.mark.asyncio
 async def test_pending_channel_messages_are_dropped(tmp_path):
     a, _ = make_adapter(tmp_path)
