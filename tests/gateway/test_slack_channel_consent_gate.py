@@ -85,12 +85,13 @@ class TestChannelConsentStore:
 # ---------------------------------------------------------------------------
 
 
-def make_adapter(tmp_path, gate=True, cjn=None):
+def make_adapter(tmp_path, gate=True, cjn=None, consent_prompt=None):
     config = PlatformConfig(
         enabled=True,
         token="***",
         channel_consent_gate=gate,
         channel_join_notification=cjn,
+        channel_consent_prompt=consent_prompt,
     )
     a = SlackAdapter(config)
     a._app = MagicMock()
@@ -154,6 +155,37 @@ async def test_other_member_join_does_not_trigger_gate(tmp_path):
     await a._handle_member_joined_channel(join_event(user="U_SOMEONE"))
     client.chat_postMessage.assert_not_awaited()
     assert a._consent_store.status("C_NEW") is None
+
+
+@pytest.mark.asyncio
+async def test_default_prompt_mentions_data_visibility(tmp_path):
+    a, client = make_adapter(tmp_path)
+    await a._handle_member_joined_channel(join_event())
+    text = client.chat_postMessage.await_args.kwargs["text"]
+    assert "<@U_HUMAN>" in text  # inviter rendered
+    assert "sensitive" in text  # data warning present
+    assert "anyone" in text  # visibility warning present
+
+
+@pytest.mark.asyncio
+async def test_custom_consent_prompt_used(tmp_path):
+    a, client = make_adapter(
+        tmp_path,
+        consent_prompt="Custom gate for {channel_ref}, invited by {inviter_ref}.",
+    )
+    await a._handle_member_joined_channel(join_event())
+    text = client.chat_postMessage.await_args.kwargs["text"]
+    assert text == "Custom gate for <#C_NEW>, invited by <@U_HUMAN>."
+
+
+@pytest.mark.asyncio
+async def test_invalid_consent_prompt_falls_back_to_default(tmp_path):
+    a, client = make_adapter(
+        tmp_path, consent_prompt="bad {nonexistent_placeholder}"
+    )
+    await a._handle_member_joined_channel(join_event())
+    text = client.chat_postMessage.await_args.kwargs["text"]
+    assert "sensitive" in text  # default used
 
 
 @pytest.mark.asyncio

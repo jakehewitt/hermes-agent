@@ -135,6 +135,42 @@ class TestPlatformConfigRoundtrip:
         restored = PlatformConfig.from_dict({"channel_consent_gate": "true"})
         assert restored.channel_consent_gate is True
 
+    def test_channel_consent_gate_dict_form_with_prompt(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": True, "prompt": "Custom {channel_ref}"}}
+        )
+        assert restored.channel_consent_gate is True
+        assert restored.channel_consent_prompt == "Custom {channel_ref}"
+
+    def test_channel_consent_gate_dict_form_enabled_defaults_true(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"prompt": "hi"}}
+        )
+        assert restored.channel_consent_gate is True
+
+    def test_channel_consent_gate_dict_form_disabled(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": False, "prompt": "hi"}}
+        )
+        assert restored.channel_consent_gate is False
+
+    def test_channel_consent_gate_blank_prompt_ignored(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": True, "prompt": "  "}}
+        )
+        assert restored.channel_consent_gate is True
+        assert restored.channel_consent_prompt is None
+
+    def test_channel_consent_gate_prompt_roundtrip(self):
+        pc = PlatformConfig(
+            enabled=True,
+            channel_consent_gate=True,
+            channel_consent_prompt="Custom prompt",
+        )
+        restored = PlatformConfig.from_dict(pc.to_dict())
+        assert restored.channel_consent_gate is True
+        assert restored.channel_consent_prompt == "Custom prompt"
+
 
 class TestGetConnectedPlatforms:
     def test_returns_enabled_with_token(self):

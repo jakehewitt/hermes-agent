@@ -2230,6 +2230,22 @@ class SlackAdapter(BasePlatformAdapter):
             )
             return False
 
+    # Default consent prompt when channel_consent_gate.prompt is unset.
+    # Same placeholders as the join notification: {channel_id},
+    # {channel_ref}, {inviter_id}, {inviter_ref}.
+    DEFAULT_CONSENT_PROMPT = (
+        "Hi! {inviter_ref} added me to this channel. Before I activate, "
+        "please be aware:\n"
+        "• Once active, I read messages in this channel, and what I learn "
+        "here may surface in my answers to *anyone* in the workspace — "
+        "channel discussions are not kept private to this channel.\n"
+        "• By clicking *Activate*, you confirm this channel does not "
+        "contain sensitive or confidential discussions that shouldn't be "
+        "shared beyond its members.\n"
+        "Until someone activates me, I stay dormant — not reading or "
+        "responding to anything here."
+    )
+
     async def _post_consent_prompt(
         self, channel_id: str, inviter_id: str
     ) -> None:
@@ -2250,11 +2266,28 @@ class SlackAdapter(BasePlatformAdapter):
             return
 
         inviter_ref = f"<@{inviter_id}>" if inviter_id else "someone"
-        prompt = (
-            f"Hi! I was added to this channel by {inviter_ref}. "
-            "I'll stay dormant — not reading or responding to messages — "
-            "until someone confirms I should be active here."
+        template = (
+            self.config.channel_consent_prompt or self.DEFAULT_CONSENT_PROMPT
         )
+        try:
+            prompt = template.format(
+                channel_id=channel_id,
+                channel_ref=f"<#{channel_id}>",
+                inviter_id=inviter_id or "unknown",
+                inviter_ref=inviter_ref,
+            )
+        except (KeyError, IndexError, ValueError):
+            logger.warning(
+                "[Slack] channel_consent_gate prompt template has invalid "
+                "placeholders; using default. Template: %r",
+                template,
+            )
+            prompt = self.DEFAULT_CONSENT_PROMPT.format(
+                channel_id=channel_id,
+                channel_ref=f"<#{channel_id}>",
+                inviter_id=inviter_id or "unknown",
+                inviter_ref=inviter_ref,
+            )
         blocks = [
             {
                 "type": "section",
