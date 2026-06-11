@@ -914,6 +914,19 @@ class SlackAdapter(BasePlatformAdapter):
             async def handle_member_left_channel(event, say):
                 await self._handle_member_left_channel(event)
 
+            # When the BOT ITSELF is removed, Slack does NOT send
+            # member_left_channel (that's for other members, delivered to
+            # apps still in the channel). The app's own removal arrives as
+            # channel_left (public) / group_left (private), which also carry
+            # actor_id — the user who removed the bot.
+            @self._app.event("channel_left")
+            async def handle_channel_left(event, say):
+                await self._handle_bot_removed_from_channel(event)
+
+            @self._app.event("group_left")
+            async def handle_group_left(event, say):
+                await self._handle_bot_removed_from_channel(event)
+
             # Consent gate buttons (channel_consent_gate config).
             for _action_id in (
                 "hermes_consent_activate",
@@ -2145,7 +2158,7 @@ class SlackAdapter(BasePlatformAdapter):
             "✅ {channel_ref} was activated automatically "
             "(public channel — no confirmation required)."
         ),
-        "removed": "👋 I was removed from {channel_ref}.",
+        "removed": "👋 I was removed from {channel_ref} by {user_ref}.",
     }
 
     def _join_notification_target(self) -> str:
@@ -2263,24 +2276,30 @@ class SlackAdapter(BasePlatformAdapter):
             await self._post_consent_prompt(channel_id, inviter_id)
 
     async def _handle_member_left_channel(self, event: dict) -> None:
+        """member_left_channel only fires for OTHER members leaving (and is
+        not delivered for the bot's own removal — see channel_left /
+        group_left). Registered to keep Bolt from logging unhandled-request
+        warnings; intentionally a no-op.
+        """
+        return
+
+    async def _handle_bot_removed_from_channel(self, event: dict) -> None:
         """React to the bot being removed from a channel.
 
-        Posts a 'removed' audit line to the status channel and marks any
-        consent record so the next join re-prompts. Slack does not say WHO
-        removed the bot — the event only reports the departure — so the
-        audit line cannot name the remover.
-        """
-        left_user = event.get("user", "")
-        team_id = event.get("team") or ""
-        bot_uid = self._team_bot_user_ids.get(team_id, self._bot_user_id)
-        if not left_user or not bot_uid or left_user != bot_uid:
-            return
+        Slack delivers the app's own removal as ``channel_left`` (public)
+        or ``group_left`` (private) — NOT member_left_channel. Both carry
+        ``actor_id``: the user who removed the bot.
 
+        Posts a 'removed' audit line to the status channel and clears any
+        consent record so the next join re-prompts.
+        """
         channel_id = event.get("channel", "")
         if not channel_id:
             return
 
-        # Dedup, mirroring the join handler.
+        actor_id = event.get("actor_id", "")
+
+        # Dedup against Socket Mode replays.
         event_ts = event.get("event_ts", "")
         if event_ts and self._dedup.is_duplicate(
             f"left:{channel_id}:{event_ts}"
@@ -2288,8 +2307,9 @@ class SlackAdapter(BasePlatformAdapter):
             return
 
         logger.info(
-            "[Slack] Bot removed from channel %s",
+            "[Slack] Bot removed from channel %s by %s",
             channel_id,
+            actor_id or "unknown",
         )
 
         # Drop any consent record: membership ended, so standing consent
@@ -2309,6 +2329,8 @@ class SlackAdapter(BasePlatformAdapter):
             "removed",
             channel_id=channel_id,
             channel_ref=f"<#{channel_id}>",
+            user_id=actor_id or "unknown",
+            user_ref=f"<@{actor_id}>" if actor_id else "someone",
         )
 
     async def _send_channel_join_notification(
