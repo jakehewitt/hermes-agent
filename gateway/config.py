@@ -362,7 +362,17 @@ class PlatformConfig:
     # prompt it posts on join. Channels joined before the gate was enabled
     # are unaffected (the gate only tracks joins it observed). Default False
     # preserves stock behavior.
+    # YAML accepts either a bool or a dict:
+    #   channel_consent_gate: true
+    #   channel_consent_gate:
+    #     enabled: true
+    #     prompt: "Custom consent prompt. Placeholders: {channel_id},
+    #              {channel_ref}, {inviter_id}, {inviter_ref}"
     channel_consent_gate: bool = False
+
+    # Optional override for the consent prompt text (set via the dict form
+    # of channel_consent_gate above). None → built-in default.
+    channel_consent_prompt: Optional[str] = None
 
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -379,7 +389,13 @@ class PlatformConfig:
         if self.channel_join_notification:
             result["channel_join_notification"] = self.channel_join_notification
         if self.channel_consent_gate:
-            result["channel_consent_gate"] = self.channel_consent_gate
+            if self.channel_consent_prompt:
+                result["channel_consent_gate"] = {
+                    "enabled": True,
+                    "prompt": self.channel_consent_prompt,
+                }
+            else:
+                result["channel_consent_gate"] = self.channel_consent_gate
         if self.token:
             result["token"] = self.token
         if self.api_key:
@@ -429,6 +445,13 @@ class PlatformConfig:
         _ccg = data.get("channel_consent_gate")
         if _ccg is None:
             _ccg = data.get("extra", {}).get("channel_consent_gate")
+        # Dict form: {enabled: bool (default true), prompt: str}
+        _ccg_prompt = None
+        if isinstance(_ccg, dict):
+            _raw_prompt = _ccg.get("prompt")
+            if _raw_prompt is not None and str(_raw_prompt).strip():
+                _ccg_prompt = str(_raw_prompt)
+            _ccg = _ccg.get("enabled", True)
 
         return cls(
             enabled=_coerce_bool(data.get("enabled"), False),
@@ -440,6 +463,7 @@ class PlatformConfig:
             gateway_restart_messages=_grm,
             channel_join_notification=_cjn,
             channel_consent_gate=_coerce_bool(_ccg, False),
+            channel_consent_prompt=_ccg_prompt,
             extra=data.get("extra", {}),
         )
 
