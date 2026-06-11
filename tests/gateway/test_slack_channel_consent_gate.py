@@ -497,9 +497,53 @@ async def test_pending_channel_messages_are_dropped(tmp_path):
             "channel_type": "channel",
             "team": "T1",
             "ts": "1.0",
-            "text": "<@U_BOT> hello",
+            "text": "hello everyone",
         }
     )
+    a.handle_message.assert_not_awaited()
+
+
+def dormant_mention_event(ts="5.0", text="<@U_BOT> are you alive?"):
+    return {
+        "type": "message",
+        "user": "U_HUMAN",
+        "channel": "C_NEW",
+        "channel_type": "channel",
+        "team": "T1",
+        "ts": ts,
+        "text": text,
+    }
+
+
+@pytest.mark.asyncio
+async def test_mention_in_dormant_channel_reposts_prompt(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "declined")
+    await a._handle_slack_message(dormant_mention_event())
+    # Not processed as a message...
+    a.handle_message.assert_not_awaited()
+    # ...but the consent prompt was re-posted and state reset to pending
+    client.chat_postMessage.assert_awaited_once()
+    assert a._consent_store.status("C_NEW") == "pending"
+
+
+@pytest.mark.asyncio
+async def test_dormant_mention_reprompt_respects_cooldown(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "pending")
+    await a._handle_slack_message(dormant_mention_event(ts="6.0"))
+    await a._handle_slack_message(dormant_mention_event(ts="7.0"))
+    client.chat_postMessage.assert_awaited_once()  # second suppressed
+
+
+@pytest.mark.asyncio
+async def test_dormant_non_mention_stays_silent(tmp_path):
+    a, client = make_adapter(tmp_path)
+    a._consent_store.set("C_NEW", "pending")
+    await a._handle_slack_message(
+        dormant_mention_event(ts="8.0", text="no mention here")
+    )
+    client.chat_postMessage.assert_not_awaited()
     a.handle_message.assert_not_awaited()
 
 
