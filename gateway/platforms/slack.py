@@ -2132,6 +2132,63 @@ class SlackAdapter(BasePlatformAdapter):
         "I was added to {channel_ref} by {inviter_ref}."
     )
 
+    # Default consent-outcome follow-ups posted to the same status channel
+    # (audit trail). Keys map to channel_join_notification overrides.
+    DEFAULT_CONSENT_AUDIT_MESSAGES = {
+        "activated": "✅ {channel_ref} was activated by {user_ref}.",
+        "declined": "🚫 {channel_ref} was declined by {user_ref}.",
+        "auto_activated": (
+            "✅ {channel_ref} was activated automatically "
+            "(public channel — no confirmation required)."
+        ),
+    }
+
+    def _join_notification_target(self) -> str:
+        """Return the configured status channel, or '' when unset."""
+        cfg = self.config.channel_join_notification
+        if not cfg:
+            return ""
+        return str(cfg.get("channel", "")).strip()
+
+    async def _send_consent_audit(self, kind: str, **placeholders) -> None:
+        """Post a consent lifecycle follow-up to the status channel.
+
+        ``kind`` is one of DEFAULT_CONSENT_AUDIT_MESSAGES' keys; the
+        template can be overridden via the same key on
+        ``channel_join_notification``. No-op when no status channel is
+        configured. Failures are logged, never raised — audit posts must
+        not break the consent flow itself.
+        """
+        target = self._join_notification_target()
+        if not target:
+            return
+        cfg = self.config.channel_join_notification or {}
+        template = cfg.get(kind) or self.DEFAULT_CONSENT_AUDIT_MESSAGES.get(
+            kind, ""
+        )
+        if not template:
+            return
+        try:
+            text = template.format(**placeholders)
+        except (KeyError, IndexError, ValueError):
+            logger.warning(
+                "[Slack] channel_join_notification %r template has invalid "
+                "placeholders; using default. Template: %r",
+                kind,
+                template,
+            )
+            text = self.DEFAULT_CONSENT_AUDIT_MESSAGES[kind].format(
+                **placeholders
+            )
+        result = await self.send(target, text)
+        if not result.success:
+            logger.warning(
+                "[Slack] consent audit (%s) send to %s failed: %s",
+                kind,
+                target,
+                result.error,
+            )
+
     async def _handle_member_joined_channel(self, event: dict) -> None:
         """React to the bot being added to a channel.
 
@@ -2188,6 +2245,15 @@ class SlackAdapter(BasePlatformAdapter):
                     self._get_consent_store().forget(channel_id)
                 except Exception:  # pragma: no cover - defensive
                     pass
+                await self._send_consent_audit(
+                    "auto_activated",
+                    channel_id=channel_id,
+                    channel_ref=f"<#{channel_id}>",
+                    inviter_id=inviter_id or "unknown",
+                    inviter_ref=(
+                        f"<@{inviter_id}>" if inviter_id else "someone"
+                    ),
+                )
                 return
             await self._post_consent_prompt(channel_id, inviter_id)
 
@@ -2482,6 +2548,16 @@ class SlackAdapter(BasePlatformAdapter):
             "approved" if approved else "declined",
             user_name,
             user_id,
+        )
+
+        # Status-channel audit follow-up (closes the loop on the earlier
+        # "awaiting activation" join notification).
+        await self._send_consent_audit(
+            "activated" if approved else "declined",
+            channel_id=channel_id,
+            channel_ref=f"<#{channel_id}>",
+            user_id=user_id or "unknown",
+            user_ref=f"<@{user_id}>" if user_id else user_name,
         )
 
     async def _handle_slack_message(self, event: dict) -> None:

@@ -354,6 +354,17 @@ class PlatformConfig:
     #   channel: target channel for the notice (id like "C0123…" or "#name")
     #   message: optional template; placeholders {channel_id}, {inviter_id},
     #            {channel_ref} (renders as a clickable <#id>), {inviter_ref}
+    #   activated: optional template for the consent-approved follow-up;
+    #            placeholders {channel_id}, {channel_ref}, {user_id},
+    #            {user_ref}
+    #   declined: optional template for the consent-declined follow-up
+    #            (same placeholders as activated)
+    #   auto_activated: optional template for public channels exempted from
+    #            the consent gate (placeholders {channel_id}, {channel_ref},
+    #            {inviter_id}, {inviter_ref})
+    # The activated/declined/auto_activated follow-ups serve as a consent
+    # audit trail in the status channel and are only sent when the consent
+    # gate is enabled.
     # Default None preserves stock behavior (no notification, event ignored).
     channel_join_notification: Optional[Dict[str, str]] = None
 
