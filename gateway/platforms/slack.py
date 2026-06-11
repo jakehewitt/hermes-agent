@@ -2569,13 +2569,26 @@ class SlackAdapter(BasePlatformAdapter):
             return
 
         approved = action_id == "hermes_consent_activate"
+        leave_on_decline = (
+            not approved
+            and self.config.channel_consent_on_decline == "leave"
+        )
         try:
-            self._get_consent_store().set(
-                channel_id,
-                "approved" if approved else "declined",
-                by_user_id=user_id,
-                by_user_name=user_name,
-            )
+            store = self._get_consent_store()
+            if leave_on_decline:
+                # The bot is about to leave; drop the record entirely so a
+                # future re-invite starts a fresh consent prompt (and the
+                # store doesn't accumulate entries for channels we're not
+                # in). channel_left will fire too, but its forget() is then
+                # a harmless no-op.
+                store.forget(channel_id)
+            else:
+                store.set(
+                    channel_id,
+                    "approved" if approved else "declined",
+                    by_user_id=user_id,
+                    by_user_name=user_name,
+                )
         except Exception:  # pragma: no cover - defensive
             logger.warning(
                 "[Slack] Could not persist consent decision for %s",
@@ -2584,14 +2597,20 @@ class SlackAdapter(BasePlatformAdapter):
             )
             return
 
-        decision_text = (
-            f"✅ Activated by <@{user_id}> — I'm now live in this channel."
-            if approved
-            else (
+        if approved:
+            decision_text = (
+                f"✅ Activated by <@{user_id}> — I'm now live in this channel."
+            )
+        elif leave_on_decline:
+            decision_text = (
+                f"🚫 Declined by <@{user_id}> — I'm leaving the channel. "
+                "Re-invite me if you change your mind."
+            )
+        else:
+            decision_text = (
                 f"🚫 Declined by <@{user_id}> — I'll stay dormant here. "
                 "Re-invite me to ask again."
             )
-        )
 
         # Replace the prompt (buttons removed) with the decision.
         try:
@@ -2635,6 +2654,37 @@ class SlackAdapter(BasePlatformAdapter):
             user_id=user_id or "unknown",
             user_ref=f"<@{user_id}>" if user_id else user_name,
         )
+
+        # Leave last so the decision message and audit post while we're
+        # still in the channel. channel_left/group_left fires on our way
+        # out and posts the 'removed' audit line like any other removal.
+        if leave_on_decline:
+            try:
+                client = self._get_client(channel_id)
+                if client is not None:
+                    await client.conversations_leave(channel=channel_id)
+                    logger.info(
+                        "[Slack] Left channel %s after declined consent",
+                        channel_id,
+                    )
+            except Exception:
+                logger.warning(
+                    "[Slack] Could not leave channel %s after declined "
+                    "consent — marking dormant instead",
+                    channel_id,
+                    exc_info=True,
+                )
+                # Leave failed: restore the dormant record so the channel
+                # is still blocked despite us remaining in it.
+                try:
+                    self._get_consent_store().set(
+                        channel_id,
+                        "declined",
+                        by_user_id=user_id,
+                        by_user_name=user_name,
+                    )
+                except Exception:  # pragma: no cover - defensive
+                    pass
 
     async def _handle_slack_message(self, event: dict) -> None:
         """Handle an incoming Slack message event."""

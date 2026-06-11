@@ -384,6 +384,8 @@ class PlatformConfig:
     #     prompt: "Custom consent prompt. Placeholders: {channel_id},
     #              {channel_ref}, {inviter_id}, {inviter_ref}"
     #     public_channels: false   # skip the gate for public channels
+    #     on_decline: leave        # leave the channel when declined
+    #                              # (default: dormant — stay but ignore)
     channel_consent_gate: bool = False
 
     # Optional override for the consent prompt text (set via the dict form
@@ -395,6 +397,11 @@ class PlatformConfig:
     # — public-channel joins activate immediately (join notification still
     # fires either way).
     channel_consent_public_channels: bool = True
+
+    # What happens when consent is declined: "dormant" (default — stay in
+    # the channel but ignore everything) or "leave" (the bot leaves the
+    # channel; re-inviting starts a fresh consent prompt).
+    channel_consent_on_decline: str = "dormant"
 
     # Platform-specific settings
     extra: Dict[str, Any] = field(default_factory=dict)
@@ -414,12 +421,15 @@ class PlatformConfig:
             if (
                 self.channel_consent_prompt
                 or not self.channel_consent_public_channels
+                or self.channel_consent_on_decline != "dormant"
             ):
                 _gate: Dict[str, Any] = {"enabled": True}
                 if self.channel_consent_prompt:
                     _gate["prompt"] = self.channel_consent_prompt
                 if not self.channel_consent_public_channels:
                     _gate["public_channels"] = False
+                if self.channel_consent_on_decline != "dormant":
+                    _gate["on_decline"] = self.channel_consent_on_decline
                 result["channel_consent_gate"] = _gate
             else:
                 result["channel_consent_gate"] = self.channel_consent_gate
@@ -476,11 +486,15 @@ class PlatformConfig:
         # public_channels: bool (default true)}
         _ccg_prompt = None
         _ccg_public = True
+        _ccg_on_decline = "dormant"
         if isinstance(_ccg, dict):
             _raw_prompt = _ccg.get("prompt")
             if _raw_prompt is not None and str(_raw_prompt).strip():
                 _ccg_prompt = str(_raw_prompt)
             _ccg_public = _coerce_bool(_ccg.get("public_channels"), True)
+            _raw_on_decline = str(_ccg.get("on_decline") or "").strip().lower()
+            if _raw_on_decline in {"dormant", "leave"}:
+                _ccg_on_decline = _raw_on_decline
             _ccg = _ccg.get("enabled", True)
 
         return cls(
@@ -495,6 +509,7 @@ class PlatformConfig:
             channel_consent_gate=_coerce_bool(_ccg, False),
             channel_consent_prompt=_ccg_prompt,
             channel_consent_public_channels=_ccg_public,
+            channel_consent_on_decline=_ccg_on_decline,
             extra=data.get("extra", {}),
         )
 

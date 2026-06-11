@@ -212,6 +212,32 @@ class TestPlatformConfigRoundtrip:
         assert restored.channel_consent_gate is True
         assert restored.channel_consent_public_channels is False
 
+    def test_channel_consent_on_decline_defaults_dormant(self):
+        assert PlatformConfig().channel_consent_on_decline == "dormant"
+        restored = PlatformConfig.from_dict({"channel_consent_gate": True})
+        assert restored.channel_consent_on_decline == "dormant"
+
+    def test_channel_consent_on_decline_leave(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": True, "on_decline": "leave"}}
+        )
+        assert restored.channel_consent_on_decline == "leave"
+
+    def test_channel_consent_on_decline_invalid_falls_back(self):
+        restored = PlatformConfig.from_dict(
+            {"channel_consent_gate": {"enabled": True, "on_decline": "explode"}}
+        )
+        assert restored.channel_consent_on_decline == "dormant"
+
+    def test_channel_consent_on_decline_roundtrip(self):
+        pc = PlatformConfig(
+            enabled=True,
+            channel_consent_gate=True,
+            channel_consent_on_decline="leave",
+        )
+        restored = PlatformConfig.from_dict(pc.to_dict())
+        assert restored.channel_consent_on_decline == "leave"
+
 
 class TestGetConnectedPlatforms:
     def test_returns_enabled_with_token(self):
