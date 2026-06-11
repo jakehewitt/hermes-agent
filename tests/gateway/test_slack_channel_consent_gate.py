@@ -528,12 +528,13 @@ async def test_mention_in_dormant_channel_reposts_prompt(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_dormant_mention_reprompt_respects_cooldown(tmp_path):
+async def test_dormant_mention_reprompts_every_time(tmp_path):
+    """No cooldown — every mention re-offers the prompt."""
     a, client = make_adapter(tmp_path)
     a._consent_store.set("C_NEW", "pending")
     await a._handle_slack_message(dormant_mention_event(ts="6.0"))
     await a._handle_slack_message(dormant_mention_event(ts="7.0"))
-    client.chat_postMessage.assert_awaited_once()  # second suppressed
+    assert client.chat_postMessage.await_count == 2
 
 
 @pytest.mark.asyncio

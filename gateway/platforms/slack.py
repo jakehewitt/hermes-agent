@@ -344,9 +344,6 @@ class SlackAdapter(BasePlatformAdapter):
         # Channel consent gate state (channel_consent_gate config). Lazy:
         # the JSON store is only touched when the gate is enabled.
         self._consent_store: Optional[Any] = None
-        # Rate limit for re-posting the consent prompt when a dormant
-        # channel @mentions the bot: channel_id → monotonic timestamp.
-        self._consent_reprompt_at: Dict[str, float] = {}
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -2451,29 +2448,12 @@ class SlackAdapter(BasePlatformAdapter):
         "responding to anything here."
     )
 
-    # Minimum seconds between mention-triggered consent re-prompts per
-    # channel, so repeated @mentions can't spam the prompt.
-    CONSENT_REPROMPT_COOLDOWN = 300
-
     async def _reprompt_consent_on_mention(self, channel_id: str) -> None:
         """Re-post the consent prompt when a dormant channel @mentions us.
 
         Gives pending/declined channels a recovery path that doesn't
-        require kicking and re-inviting the bot. Rate-limited per channel
-        by CONSENT_REPROMPT_COOLDOWN.
+        require kicking and re-inviting the bot.
         """
-        import time as _time
-
-        now = _time.monotonic()
-        last = self._consent_reprompt_at.get(channel_id, 0.0)
-        if now - last < self.CONSENT_REPROMPT_COOLDOWN:
-            logger.debug(
-                "[Slack] Consent re-prompt for %s suppressed (cooldown)",
-                channel_id,
-            )
-            return
-        self._consent_reprompt_at[channel_id] = now
-
         logger.info(
             "[Slack] Re-posting consent prompt in %s (mentioned while "
             "dormant)",
