@@ -30,6 +30,11 @@ def make_adapter(cjn=None):
     a = SlackAdapter(config)
     a._app = MagicMock()
     a._app.client = AsyncMock()
+    # conversations.info backs _resolve_channel_name ({channel_name}); return
+    # a real dict so the plain-text name is deterministic in tests.
+    a._app.client.conversations_info = AsyncMock(
+        return_value={"channel": {"name": "secret-room", "is_private": True}}
+    )
     a._bot_user_id = "U_BOT"
     a._running = True
     a.send = AsyncMock(return_value=SendResult(success=True))
@@ -130,3 +135,50 @@ async def test_send_failure_is_swallowed():
     a.send = AsyncMock(return_value=SendResult(success=False, error="boom"))
     # Must not raise
     await a._handle_member_joined_channel(make_event())
+
+
+@pytest.mark.asyncio
+async def test_channel_name_placeholder_resolves_plaintext_name():
+    # {channel_name} renders the real channel name (no leading #) so the
+    # status notice is readable even when {channel_ref} would mask to
+    # "Private Channel" for non-members.
+    a = make_adapter(
+        cjn={
+            "channel": "C_STATUS",
+            "message": "Added to #{channel_name} ({channel_ref}) by {inviter_ref}",
+        }
+    )
+    await a._handle_member_joined_channel(make_event())
+    _, text = a.send.await_args.args
+    assert text == "Added to #secret-room (<#C_NEW>) by <@U_HUMAN>"
+
+
+@pytest.mark.asyncio
+async def test_channel_name_falls_back_to_id_when_lookup_fails():
+    # conversations.info failing must not break the notice; {channel_name}
+    # degrades to the channel id rather than raising.
+    a = make_adapter(
+        cjn={"channel": "C_STATUS", "message": "joined {channel_name}"}
+    )
+    a._app.client.conversations_info = AsyncMock(side_effect=Exception("boom"))
+    await a._handle_member_joined_channel(make_event())
+    a.send.assert_awaited_once()
+    _, text = a.send.await_args.args
+    assert text == "joined C_NEW"
+
+
+@pytest.mark.asyncio
+async def test_default_template_unchanged_ignores_channel_name():
+    # Stock behavior preserved: the default template still renders the
+    # channel ref (and only the ref), so omitting a custom message is a no-op
+    # change relative to before {channel_name} existed.
+    a = make_adapter(cjn={"channel": "C_STATUS"})
+    await a._handle_member_joined_channel(make_event())
+    _, text = a.send.await_args.args
+    assert text == SlackAdapter.DEFAULT_CHANNEL_JOIN_MESSAGE.format(
+        channel_ref="<#C_NEW>",
+        channel_name="secret-room",
+        inviter_ref="<@U_HUMAN>",
+    )
+    # Default template contains no {channel_name}, so the name is absent.
+    assert "secret-room" not in text

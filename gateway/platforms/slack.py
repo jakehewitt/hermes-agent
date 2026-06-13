@@ -2186,6 +2186,17 @@ class SlackAdapter(BasePlatformAdapter):
         )
         if not template:
             return
+        # Resolve a plain-text {channel_name} so audit lines stay readable in
+        # the status channel even for private channels (where {channel_ref}
+        # masks to "Private Channel" for non-members). Best-effort: on
+        # 'removed' the bot has already left, so the lookup fails and falls
+        # back to the id — acceptable for an audit line. Callers may override
+        # by passing channel_name explicitly.
+        if "channel_name" not in placeholders:
+            cid = placeholders.get("channel_id", "")
+            placeholders["channel_name"] = (
+                await self._resolve_channel_name(cid) if cid else ""
+            )
         try:
             text = template.format(**placeholders)
         except (KeyError, IndexError, ValueError):
@@ -2350,10 +2361,12 @@ class SlackAdapter(BasePlatformAdapter):
 
         template = cfg.get("message") or self.DEFAULT_CHANNEL_JOIN_MESSAGE
         inviter_ref = f"<@{inviter_id}>" if inviter_id else "someone"
+        channel_name = await self._resolve_channel_name(channel_id)
         try:
             text = template.format(
                 channel_id=channel_id,
                 channel_ref=f"<#{channel_id}>",
+                channel_name=channel_name,
                 inviter_id=inviter_id or "unknown",
                 inviter_ref=inviter_ref,
             )
@@ -2365,6 +2378,7 @@ class SlackAdapter(BasePlatformAdapter):
             )
             text = self.DEFAULT_CHANNEL_JOIN_MESSAGE.format(
                 channel_ref=f"<#{channel_id}>",
+                channel_name=channel_name,
                 inviter_ref=inviter_ref,
             )
 
@@ -2417,6 +2431,41 @@ class SlackAdapter(BasePlatformAdapter):
                 exc_info=True,
             )
             return False
+
+    async def _resolve_channel_name(self, channel_id: str) -> str:
+        """Best-effort plain-text channel name (no leading #) for a channel.
+
+        Slack masks a ``<#C…>`` channel mention as "Private Channel" for any
+        reader who is not a member of that private channel, so a status-channel
+        notice that only uses ``{channel_ref}`` is unreadable to the people
+        watching it. Resolving the real name via conversations.info gives a
+        plain-text ``{channel_name}`` that always renders.
+
+        Returns the channel_id unchanged when the lookup fails (e.g. the bot
+        has already left the channel, as on a 'removed' audit line). Never
+        raises — name resolution is cosmetic and must not break the
+        notification path.
+        """
+        if not channel_id:
+            return channel_id
+        try:
+            client = self._get_client(channel_id)
+            if client is None:
+                return channel_id
+            resp = await client.conversations_info(channel=channel_id)
+            info = (
+                resp.get("channel", {}) if isinstance(resp, dict)
+                else getattr(resp, "data", {}).get("channel", {})
+            )
+            return info.get("name") or channel_id
+        except Exception:
+            logger.debug(
+                "[Slack] conversations_info name lookup failed for %s; "
+                "using id",
+                channel_id,
+                exc_info=True,
+            )
+            return channel_id
 
     def _is_channel_consent_blocked(self, channel_id: str) -> bool:
         """True when the consent gate says this channel is dormant."""
