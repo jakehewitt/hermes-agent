@@ -360,6 +360,29 @@ async def test_audit_templates_overridable(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_audit_channel_name_placeholder_resolves(tmp_path):
+    # {channel_name} in an audit template resolves to the plain-text name via
+    # conversations.info, so private-channel audit lines stay readable in the
+    # status channel (where {channel_ref} would mask to "Private Channel").
+    a, client = make_audit_adapter(
+        tmp_path,
+        cjn={
+            "channel": "C_STATUS",
+            "activated": "✅ #{channel_name} ({channel_ref}) live — {user_ref}",
+        },
+    )
+    client.conversations_info = AsyncMock(
+        return_value={"channel": {"name": "secret-room", "is_private": True}}
+    )
+    a._consent_store.set("C_NEW", "pending")
+    body, action = consent_click("hermes_consent_activate")
+    await a._handle_consent_action(AsyncMock(), body, action)
+    assert sent_texts(a) == [
+        "✅ #secret-room (<#C_NEW>) live — <@U_HUMAN>"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_invalid_audit_template_falls_back(tmp_path):
     a, client = make_audit_adapter(
         tmp_path,
